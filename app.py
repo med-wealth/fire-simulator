@@ -238,10 +238,12 @@ with tab_basic:
                           line_color=C["blue"], annotation_text=f"FIRE {res['fire_age']}歳")
         fig.add_hline(y=res["fire_target"], line_dash="dot",
                       line_color=C["baseline"], annotation_text="必要資産")
+        y_max = assets * 10  # 初期資産の10倍を上限に
         fig.update_layout(
             title="資産推移シミュレーション（〜100歳）",
             xaxis_title="年齢（歳）", yaxis_title="資産（万円）",
             xaxis=dict(range=[base_age, 100]),
+            yaxis=dict(range=[0, y_max]),
             template="plotly_dark", height=400,
             paper_bgcolor="#1a2635", plot_bgcolor="#1a2635",
         )
@@ -249,6 +251,7 @@ with tab_basic:
 
         if is_paid:
             st.markdown("**年齢別資産（5年刻み）**")
+            st.caption("※ 教育費（現在価値）を控除した投資可能資産をベースに計算しています。教育費は別途積み立てが必要です。")
             rows = [(base_age + i, f"{arr[i]:,}万円")
                     for i in range(0, len(arr), 5) if base_age + i <= 100]
             st.dataframe(pd.DataFrame(rows, columns=["年齢","資産"]),
@@ -648,3 +651,13 @@ with tab_scenarios:
 # ── フッター ─────────────────────────────────────────────────
 st.markdown("---")
 st.caption("本ツールは学術論文のシミュレーションを再現したものです。投資助言ではありません。過去のデータは将来の成果を保証しません。  |  Medwealth Lab Tokyo")
+st.markdown("""<div style="background:rgba(255,255,255,0.03);border:1px solid rgba(255,255,255,0.08);
+    border-radius:10px;padding:14px 18px;font-size:12px;color:#8a9bb0;line-height:1.8;margin-top:4px">
+⚠️ <strong style="color:#c8d6e0">免責事項・自己責任のご確認</strong><br>
+本シミュレーターは教育・情報提供を目的としており、投資勧誘・個別投資助言ではありません。
+表示される数値はあくまでシミュレーション結果であり、将来の資産額や退職時期を保証するものではありません。
+実際の投資判断・退職計画・税務・保険に関する意思決定は、ご自身の責任において行ってください。
+必要に応じてファイナンシャルプランナー・税理士・医師等の専門家にご相談ください。
+本ツールの利用によって生じたいかなる損害についても、運営者は一切の責任を負いません。
+</div>""", unsafe_allow_html=True)
+st.markdown("")
