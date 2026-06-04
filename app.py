@@ -305,7 +305,7 @@ with tab_hcsv:
 
         col_p1, col_p2, col_p3 = st.columns(3)
         with col_p1:
-            hcsv_initial = st.number_input("初期資産（万円）", 100, 999999, 10000, step=500)
+            hcsv_initial = st.number_input("初期資産（万円）", 100, 999999, 10000, step=500, key="hcsv_initial_input")
             wr_pct = st.select_slider("取り崩し率",
                                        options=[4,5,6,7,8,9,10],
                                        value=preset.get("wr_pct", 6))
@@ -493,7 +493,7 @@ with tab_traj:
             t_wr_pct     = st.select_slider("取り崩し率（軌跡）",
                                              options=[4,5,6,7,8,9,10],
                                              value=tpreset.get("wr_pct", 6))
-            t_initial    = st.number_input("初期資産（万円）", 100, 999999, 10000, step=500)
+            t_initial    = st.number_input("初期資産（万円）", 100, 999999, 10000, step=500, key="traj_initial_input")
         with t_col2:
             t_portfolio  = st.selectbox("ポートフォリオ（軌跡）", ["100/0","75/25","50/50"],
                                          index=["100/0","75/25","50/50"].index(tpreset.get("port","100/0")))
