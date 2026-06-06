@@ -683,30 +683,30 @@ with tab_cdr:
 
         with col_cdr1:
             st.markdown("**パラメータ設定**")
-            cdr_w0 = st.slider(
-                "初期資産 W₀（万円）", 0, 3000, 0, step=50,
+            cdr_w0 = st.number_input(
+                "初期資産 W₀（万円）", min_value=0, max_value=1_000_000, value=0, step=100,
                 key="cdr_w0",
                 help="積み立て開始時点の保有資産",
             )
-            cdr_c = st.slider(
-                "年間追加投資 C（万円）", 60, 600, 120, step=10,
+            cdr_c = st.number_input(
+                "年間追加投資 C（万円）", min_value=1, max_value=100_000, value=120, step=10,
                 key="cdr_c",
                 help="毎年の積み立て額",
             )
-            cdr_r_pct = st.slider(
-                "期待リターン r（%）", 3.0, 12.0, 7.0, step=0.1,
+            cdr_r_pct = st.number_input(
+                "期待リターン r（%）", min_value=0.1, max_value=50.0, value=7.0, step=0.1,
                 format="%.1f",
                 key="cdr_r",
                 help="年率リターン（名目）",
             )
-            cdr_wt = st.slider(
-                "FIRE目標額 W_target（万円）", 1000, 15000, 3600, step=100,
+            cdr_wt = st.number_input(
+                "FIRE目標額 W_target（万円）", min_value=100, max_value=1_000_000, value=3600, step=100,
                 key="cdr_wt",
                 help="4%ルール基準: 年間支出 × 25",
             )
 
             annual_withdraw_disp = cdr_wt * 0.04
-            st.caption(f"年間取り崩し額：{annual_withdraw_disp:.0f}万円/年（4%ルール）")
+            st.caption(f"年間取り崩し額：{annual_withdraw_disp:,.0f}万円/年（4%ルール）")
 
             # ── コア計算 ───────────────────────────────────
             cdr_r    = cdr_r_pct / 100.0
