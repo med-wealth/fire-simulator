@@ -1,9 +1,10 @@
 """
 app.py  — Medwealth Lab Tokyo | FIRE Simulator
 Human Capital Safety Valve 論文準拠 + GAS版機能完全移植
-v3: 基本FIREシミュレーションのみ無料公開 / 他タブは近日公開予定ロック
+v4: Tab 5 CDR閾値研究ツール追加
 """
 
+import math
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -89,11 +90,12 @@ if is_paid:
     st.success("✅ プロモード有効")
 
 # ── タブ ─────────────────────────────────────────────────────
-tab_basic, tab_hcsv, tab_traj, tab_scenarios = st.tabs([
+tab_basic, tab_hcsv, tab_traj, tab_scenarios, tab_cdr = st.tabs([
     "🏠 基本FIREシミュレーション",
     "🛡 人的資本セーフティバルブ",
     "📈 軌跡分析",
     "📋 論文推奨シナリオ",
+    "🔬 CDR閾値研究",
 ])
 
 # ════════════════════════════════════════════════════════════
@@ -662,6 +664,227 @@ with tab_scenarios:
         </div>""", unsafe_allow_html=True)
         st.markdown("")
         st.caption("出典：Human Capital as a Contingent Labor-Income Buffer — Financial Services Review（掲載予定）")
+
+# ════════════════════════════════════════════════════════════
+# TAB 5: CDR閾値研究ツール（Research Tool）
+# ════════════════════════════════════════════════════════════
+with tab_cdr:
+    if not is_paid:
+        show_lock()
+    else:
+        st.markdown('<div class="section-title">CDR Threshold Hypothesis — Research Tool</div>',
+                    unsafe_allow_html=True)
+        st.caption(
+            "CDR（Contribution Dependency Ratio）= 年間追加投資 ÷ 総資産。"
+            "「CDRが何%の時点で積み立てをやめると、FIRE達成が何年遅れるか」を可視化します。"
+        )
+
+        col_cdr1, col_cdr2 = st.columns([1, 2])
+
+        with col_cdr1:
+            st.markdown("**パラメータ設定**")
+            cdr_w0 = st.slider(
+                "初期資産 W₀（万円）", 0, 3000, 0, step=50,
+                key="cdr_w0",
+                help="積み立て開始時点の保有資産",
+            )
+            cdr_c = st.slider(
+                "年間追加投資 C（万円）", 60, 600, 120, step=10,
+                key="cdr_c",
+                help="毎年の積み立て額",
+            )
+            cdr_r_pct = st.slider(
+                "期待リターン r（%）", 3.0, 12.0, 7.0, step=0.1,
+                format="%.1f",
+                key="cdr_r",
+                help="年率リターン（名目）",
+            )
+            cdr_wt = st.slider(
+                "FIRE目標額 W_target（万円）", 1000, 15000, 3600, step=100,
+                key="cdr_wt",
+                help="4%ルール基準: 年間支出 × 25",
+            )
+
+            annual_withdraw_disp = cdr_wt * 0.04
+            st.caption(f"年間取り崩し額：{annual_withdraw_disp:.0f}万円/年（4%ルール）")
+
+            # ── コア計算 ───────────────────────────────────
+            cdr_r    = cdr_r_pct / 100.0
+            log_R    = math.log(1 + cdr_r) if cdr_r > 0 else 1e-9
+            Cr       = cdr_c / cdr_r if cdr_r > 0 else 1e15
+            denom_ct = cdr_w0 + Cr
+
+            if denom_ct > 0 and (cdr_wt + Cr) > 0 and (cdr_wt + Cr) / denom_ct > 0:
+                T_cont = math.log((cdr_wt + Cr) / denom_ct) / log_R
+            else:
+                T_cont = None
+
+            RHO_N      = 500
+            rho_list   = [0.001 + i * (0.25 - 0.001) / (RHO_N - 1) for i in range(RHO_N)]
+            cdr_thresh = None
+            w_at_thr   = None
+            chart_rows = []
+
+            if T_cont is not None and T_cont > 0:
+                for rho in rho_list:
+                    W_stop = cdr_c / rho
+                    numer  = cdr_c / rho + Cr
+                    if numer <= 0 or denom_ct <= 0:
+                        continue
+                    t_star = math.log(numer / denom_ct) / log_R
+                    if t_star < 0 or t_star >= T_cont:
+                        continue
+                    T_stop = t_star if W_stop >= cdr_wt else (
+                        t_star + math.log(cdr_wt / W_stop) / log_R
+                    )
+                    dT = max(T_stop - T_cont, 0.0)
+                    if not math.isfinite(dT):
+                        dT = None
+                    chart_rows.append({
+                        "CDR (%)":    round(rho * 100, 3),
+                        "遅延年数 ΔT": round(min(dT, 15.0), 4) if dT is not None else None,
+                    })
+                    if dT is not None and dT <= 1.0 and cdr_thresh is None:
+                        cdr_thresh = rho * 100
+                        w_at_thr   = W_stop
+
+            # ── メトリクスカード ──────────────────────────
+            st.markdown("")
+            m1, m2 = st.columns(2)
+            m3, m4 = st.columns(2)
+            T_cont_disp = f"{T_cont:.1f}年" if T_cont else "計算不可"
+            cdr_disp    = f"{cdr_thresh:.1f}%" if cdr_thresh else "—"
+            wstop_disp  = f"{int(cdr_c / (cdr_thresh / 100)):,}万円" if cdr_thresh else "—"
+            w1yr_disp   = f"{int(w_at_thr):,}万円"                   if w_at_thr   else "—"
+
+            for col, label, val, color in [
+                (m1, "継続FIRE達成年数",     T_cont_disp, C["half"]),
+                (m2, "CDR閾値（遅れ1年以内）", cdr_disp,  C["complete"]),
+                (m3, "停止時の資産目安",       wstop_disp, C["blue"]),
+                (m4, "遅れ1年以内の資産目安",  w1yr_disp,  C["baseline"]),
+            ]:
+                col.markdown(f"""<div class="metric-card">
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-value" style="color:{color}">{val}</div>
+                </div>""", unsafe_allow_html=True)
+
+        with col_cdr2:
+            if chart_rows:
+                df_cdr = pd.DataFrame(chart_rows).dropna()
+
+                fig_cdr = go.Figure()
+
+                # 安全領域（うす緑）
+                if cdr_thresh is not None:
+                    df_safe = df_cdr[df_cdr["CDR (%)"] <= cdr_thresh]
+                    if not df_safe.empty:
+                        x_fill = list(df_safe["CDR (%)"]) + list(reversed(df_safe["CDR (%)"].tolist()))
+                        y_fill = list(df_safe["遅延年数 ΔT"]) + [0.0] * len(df_safe)
+                        fig_cdr.add_trace(go.Scatter(
+                            x=x_fill, y=y_fill,
+                            fill="toself",
+                            fillcolor="rgba(0,158,115,0.12)",
+                            line=dict(color="rgba(0,0,0,0)"),
+                            name="安全領域",
+                            hoverinfo="skip",
+                            showlegend=True,
+                        ))
+
+                # 青い曲線：ΔT
+                fig_cdr.add_trace(go.Scatter(
+                    x=df_cdr["CDR (%)"],
+                    y=df_cdr["遅延年数 ΔT"],
+                    mode="lines",
+                    line=dict(color="#3399ff", width=2.5),
+                    name="ΔT（遅延曲線）",
+                    hovertemplate="CDR: %{x:.2f}%<br>遅延: %{y:.2f}年<extra></extra>",
+                ))
+
+                # オレンジ点線：遅れ1年ライン
+                fig_cdr.add_hline(
+                    y=1.0,
+                    line_dash="dash", line_color="#E69F00", line_width=1.5,
+                    annotation_text="遅れ1年", annotation_position="right",
+                )
+
+                # 緑点線：r/2 ライン
+                fig_cdr.add_hline(
+                    y=cdr_r_pct / 2,
+                    line_dash="dot", line_color="#009E73", line_width=1.5,
+                    annotation_text=f"r/2 = {cdr_r_pct/2:.1f}%",
+                    annotation_position="right",
+                )
+
+                # 赤縦線：CDR閾値
+                if cdr_thresh is not None:
+                    fig_cdr.add_vline(
+                        x=cdr_thresh,
+                        line_color="#D55E00", line_width=2.0,
+                        annotation_text=f"閾値 {cdr_thresh:.1f}%",
+                        annotation_position="top right",
+                    )
+
+                fig_cdr.update_layout(
+                    title="CDR ρ (%) vs 遅延年数 ΔT",
+                    xaxis=dict(title="CDR ρ (%)", range=[0, 20], ticksuffix="%"),
+                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, 15]),
+                    template="plotly_dark",
+                    height=400,
+                    paper_bgcolor="#1a2635",
+                    plot_bgcolor="#1a2635",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_cdr, use_container_width=True)
+            else:
+                st.info("パラメータを調整するとグラフが表示されます。")
+
+        # ── Research Note ─────────────────────────────────
+        st.markdown("---")
+        st.markdown('<div class="section-title">Research Note</div>', unsafe_allow_html=True)
+
+        param_val = (cdr_wt * cdr_r / cdr_c) if cdr_c > 0 else 0.0
+        dev_pct   = (param_val - 2.1) / 2.1 * 100
+
+        rn1, rn2, rn3 = st.columns(3)
+        rn1.metric(
+            "本質パラメータ  W_target × r / C",
+            f"{param_val:.3f}",
+            help="この値が閾値CDRを決定する本質パラメータ。標準ケース ≈ 2.1",
+        )
+        rn2.metric(
+            "標準ケース（2.1）からの乖離",
+            f"{dev_pct:+.1f}%",
+        )
+        rn3.metric(
+            "遅れ1年以内 CDR閾値",
+            cdr_disp,
+        )
+
+        with st.expander("📐 数式リファレンス（論文準拠）"):
+            st.markdown(r"""
+**継続シナリオのFIRE達成年数**
+
+$$T_{cont} = \frac{\ln\left(\frac{W_{target} + C/r}{W_0 + C/r}\right)}{\ln(1+r)}$$
+
+**CDR=ρになる停止時点**
+
+$$t^* = \frac{\ln\left(\frac{C/\rho + C/r}{W_0 + C/r}\right)}{\ln(1+r)}$$
+
+**停止時点の資産額**
+
+$$W_{stop} = C / \rho$$
+
+**停止シナリオのFIRE達成年数**
+
+$$T_{stop} = \begin{cases} t^* & (W_{stop} \geq W_{target}) \\ t^* + \dfrac{\ln(W_{target}/W_{stop})}{\ln(1+r)} & (\text{otherwise}) \end{cases}$$
+
+**遅れ年数**
+
+$$\Delta T = \max(T_{stop} - T_{cont},\ 0) \quad (t^* < T_{cont} \text{ の場合のみ})$$
+""")
+
+        st.caption("Research Tool — 4% CDR Threshold Hypothesis  |  Medwealth Lab Tokyo")
 
 # ── フッター ─────────────────────────────────────────────────
 st.markdown("---")
