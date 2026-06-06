@@ -731,12 +731,27 @@ with tab_cdr:
                     numer  = cdr_c / rho + Cr
                     if numer <= 0 or denom_ct <= 0:
                         continue
-                    t_star = math.log(numer / denom_ct) / log_R
-                    if t_star < 0 or t_star >= T_cont:
+
+                    t_star_raw = math.log(numer / denom_ct) / log_R
+
+                    # t_star >= T_cont: FIREより後に停止水準到達 → 比較無意味のため除外
+                    if t_star_raw >= T_cont:
                         continue
-                    T_stop = t_star if W_stop >= cdr_wt else (
-                        t_star + math.log(cdr_wt / W_stop) / log_R
-                    )
+
+                    if t_star_raw >= 0:
+                        # 通常ケース: まだ停止水準に達していないので積み立てを続けてt_star時点で停止
+                        if W_stop >= cdr_wt:
+                            T_stop = t_star_raw
+                        else:
+                            T_stop = t_star_raw + math.log(cdr_wt / W_stop) / log_R
+                    else:
+                        # t_star < 0: 現在すでにW0 > W_stop（今すぐ停止可能）
+                        # → 今すぐ停止してW0から複利成長のみでFIREを目指す
+                        if cdr_w0 >= cdr_wt:
+                            T_stop = 0.0
+                        else:
+                            T_stop = math.log(cdr_wt / cdr_w0) / log_R
+
                     dT = max(T_stop - T_cont, 0.0)
                     if not math.isfinite(dT):
                         dT = None
