@@ -762,8 +762,8 @@ with tab_cdr:
                 # Step2: チャートデータ生成（全range）
                 RHO_N    = 500
                 rho_list = [0.001 + i * (0.25 - 0.001) / (RHO_N - 1) for i in range(RHO_N)]
-                thresh_from_scan = None
 
+                # ── CDRグラフ用・t_starグラフ用データを同時生成 ──
                 for rho in rho_list:
                     W_stop     = cdr_c / rho
                     numer      = cdr_c / rho + Cr
@@ -800,14 +800,28 @@ with tab_cdr:
                         "遅延年数 ΔT": round(min(dT, 15.0), 4),
                     })
 
-                    # already_stoppable=Falseのときのみスキャンで閾値を探す
-                    if not already_stoppable and dT <= 1.0 and thresh_from_scan is None:
-                        thresh_from_scan = rho * 100
-                        w_stop_thresh    = W_stop
-                        t_star_thresh    = max(t_star_raw, 0.0)
-
-                if not already_stoppable and thresh_from_scan is not None:
-                    cdr_thresh = thresh_from_scan
+                # ── CDR閾値・t_star_thresh: rho大→小（t_star小→大）の逆順で探す ──
+                # rho小→大スキャンだとt_starが大→小になり、最初にdT<=1に入る点が
+                # t_star≒T_cont（継続とほぼ同じ無意味な点）になるため逆順が正しい
+                if not already_stoppable:
+                    for rho in reversed(rho_list):
+                        W_stop     = cdr_c / rho
+                        numer      = cdr_c / rho + Cr
+                        if numer <= 0 or denom_ct <= 0:
+                            continue
+                        t_star_raw = math.log(numer / denom_ct) / log_R
+                        if t_star_raw >= T_cont or t_star_raw < 0:
+                            continue
+                        if W_stop >= cdr_wt:
+                            T_stop = t_star_raw
+                        else:
+                            T_stop = t_star_raw + math.log(cdr_wt / W_stop) / log_R
+                        dT = max(T_stop - T_cont, 0.0)
+                        if math.isfinite(dT) and dT <= 1.0:
+                            cdr_thresh    = rho * 100
+                            w_stop_thresh = W_stop
+                            t_star_thresh = t_star_raw
+                            break
 
             # ── メトリクスカード（5枚） ───────────────────────────────────
             st.markdown("")
