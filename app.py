@@ -1,7 +1,7 @@
 """
 app.py  — Medwealth Lab Tokyo | FIRE Simulator
 Human Capital Safety Valve 論文準拠 + GAS版機能完全移植
-v4: Tab 5 CDR閾値研究ツール追加
+v4: Tab 5 CDR閾値研究ツール追加（バグ修正版）
 """
 
 import math
@@ -666,7 +666,7 @@ with tab_scenarios:
         st.caption("出典：Human Capital as a Contingent Labor-Income Buffer — Financial Services Review（掲載予定）")
 
 # ════════════════════════════════════════════════════════════
-# TAB 5: CDR閾値研究ツール（Research Tool）
+# TAB 5: CDR閾値研究ツール（Research Tool）【バグ修正版】
 # ════════════════════════════════════════════════════════════
 with tab_cdr:
     if not is_paid:
@@ -708,75 +708,125 @@ with tab_cdr:
             annual_withdraw_disp = cdr_wt * 0.04
             st.caption(f"年間取り崩し額：{annual_withdraw_disp:,.0f}万円/年（4%ルール）")
 
-            # ── コア計算 ───────────────────────────────────
+            # ── コア計算（修正版） ─────────────────────────────────────────
             cdr_r    = cdr_r_pct / 100.0
             log_R    = math.log(1 + cdr_r) if cdr_r > 0 else 1e-9
             Cr       = cdr_c / cdr_r if cdr_r > 0 else 1e15
             denom_ct = cdr_w0 + Cr
 
-            if denom_ct > 0 and (cdr_wt + Cr) > 0 and (cdr_wt + Cr) / denom_ct > 0:
+            # T_cont: 積み立て継続時のFIRE達成年数
+            T_cont = None
+            if denom_ct > 0 and (cdr_wt + Cr) / denom_ct > 0:
                 T_cont = math.log((cdr_wt + Cr) / denom_ct) / log_R
-            else:
-                T_cont = None
 
-            RHO_N      = 500
-            rho_list   = [0.001 + i * (0.25 - 0.001) / (RHO_N - 1) for i in range(RHO_N)]
-            cdr_thresh = None
-            w_at_thr   = None
-            chart_rows = []
+            # 今すぐ停止した場合のFIRE達成年数・遅れ
+            if cdr_w0 >= cdr_wt:
+                T_stop_now = 0.0
+            elif cdr_w0 > 0:
+                T_stop_now = math.log(cdr_wt / cdr_w0) / log_R
+            else:
+                T_stop_now = float('inf')
+
+            dT_now = (max(T_stop_now - T_cont, 0)
+                      if T_cont is not None and math.isfinite(T_stop_now)
+                      else float('inf'))
+
+            # rho_boundary: t_star=0になるCDR（W0 = W_stop の境界）
+            # この値より小さいρではW0 > W_stopとなり今すぐ停止可能
+            rho_boundary = cdr_c / cdr_w0 if cdr_w0 > 0 else float('inf')
+
+            # CDR閾値・停止時の資産・停止までの期間を決定
+            cdr_thresh        = None   # CDR閾値（%）
+            w_stop_thresh     = None   # 停止時の資産目安（万円）
+            t_star_thresh     = None   # 停止までの期間（年）
+            already_stoppable = False
+            chart_rows        = []
 
             if T_cont is not None and T_cont > 0:
+
+                # Step1: 今すぐ停止で遅れ1年以内かチェック
+                if math.isfinite(dT_now) and dT_now <= 1.0:
+                    already_stoppable = True
+                    cdr_thresh    = rho_boundary * 100 if math.isfinite(rho_boundary) else 0.0
+                    w_stop_thresh = cdr_w0   # 今すぐ停止 → 停止時の資産 = W0
+                    t_star_thresh = 0.0      # 今すぐ停止可能
+
+                # Step2: チャートデータ生成（全range）
+                RHO_N    = 500
+                rho_list = [0.001 + i * (0.25 - 0.001) / (RHO_N - 1) for i in range(RHO_N)]
+                thresh_from_scan = None
+
                 for rho in rho_list:
-                    W_stop = cdr_c / rho
-                    numer  = cdr_c / rho + Cr
+                    W_stop     = cdr_c / rho
+                    numer      = cdr_c / rho + Cr
                     if numer <= 0 or denom_ct <= 0:
                         continue
-
                     t_star_raw = math.log(numer / denom_ct) / log_R
 
-                    # t_star >= T_cont: FIREより後に停止水準到達 → 比較無意味のため除外
                     if t_star_raw >= T_cont:
-                        continue
+                        continue  # FIREより後に停止水準到達 → 除外
 
                     if t_star_raw >= 0:
-                        # 通常ケース: まだ停止水準に達していないので積み立てを続けてt_star時点で停止
+                        # 通常ケース: 積み立てをt_star時点で停止
                         if W_stop >= cdr_wt:
                             T_stop = t_star_raw
                         else:
                             T_stop = t_star_raw + math.log(cdr_wt / W_stop) / log_R
+                        dT = max(T_stop - T_cont, 0.0)
                     else:
-                        # t_star < 0: 現在すでにW0 > W_stop（今すぐ停止可能）
-                        # → 今すぐ停止してW0から複利成長のみでFIREを目指す
-                        if cdr_w0 >= cdr_wt:
-                            T_stop = 0.0
-                        else:
-                            T_stop = math.log(cdr_wt / cdr_w0) / log_R
+                        # t_star<0: W0 > W_stop → 今すぐ停止可能ゾーン → dT = dT_now（一定）
+                        dT = dT_now if math.isfinite(dT_now) else None
 
-                    dT = max(T_stop - T_cont, 0.0)
-                    if not math.isfinite(dT):
-                        dT = None
+                    if dT is None or not math.isfinite(dT):
+                        continue
+
                     chart_rows.append({
-                        "CDR (%)":    round(rho * 100, 3),
-                        "遅延年数 ΔT": round(min(dT, 15.0), 4) if dT is not None else None,
+                        "CDR (%)":     round(rho * 100, 3),
+                        "遅延年数 ΔT": round(min(dT, 15.0), 4),
                     })
-                    if dT is not None and dT <= 1.0 and cdr_thresh is None:
-                        cdr_thresh = rho * 100
-                        w_at_thr   = W_stop
 
-            # ── メトリクスカード ──────────────────────────
+                    # already_stoppable=Falseのときのみスキャンで閾値を探す
+                    if not already_stoppable and dT <= 1.0 and thresh_from_scan is None:
+                        thresh_from_scan = rho * 100
+                        w_stop_thresh    = W_stop
+                        t_star_thresh    = max(t_star_raw, 0.0)
+
+                if not already_stoppable and thresh_from_scan is not None:
+                    cdr_thresh = thresh_from_scan
+
+            # ── メトリクスカード（5枚） ───────────────────────────────────
             st.markdown("")
-            m1, m2 = st.columns(2)
-            m3, m4 = st.columns(2)
-            T_cont_disp = f"{T_cont:.1f}年" if T_cont else "計算不可"
-            cdr_disp    = f"{cdr_thresh:.1f}%" if cdr_thresh else "—"
-            wstop_disp  = f"{int(cdr_c / (cdr_thresh / 100)):,}万円" if cdr_thresh else "—"
-            w1yr_disp   = f"{int(w_at_thr):,}万円"                   if w_at_thr   else "—"
+            m1, m2, m3 = st.columns(3)
+            m4, m5     = st.columns(2)
+
+            T_cont_disp = f"{T_cont:.1f}年"            if T_cont is not None    else "計算不可"
+            cdr_disp    = f"{cdr_thresh:.2f}%"          if cdr_thresh is not None else "—"
+            wstop_disp  = f"{int(w_stop_thresh):,}万円"  if w_stop_thresh is not None else "—"
+            dT_now_disp = f"{dT_now:.2f}年"              if math.isfinite(dT_now) else "∞"
+
+            if already_stoppable:
+                t_star_disp  = "今すぐ停止可能（0年）"
+                t_star_color = C["complete"]
+            elif t_star_thresh is not None:
+                t_star_disp  = f"{t_star_thresh:.1f}年後"
+                t_star_color = C["half"]
+            else:
+                t_star_disp  = "—"
+                t_star_color = C["gray"]
 
             for col, label, val, color in [
-                (m1, "継続FIRE達成年数",     T_cont_disp, C["half"]),
-                (m2, "CDR閾値（遅れ1年以内）", cdr_disp,  C["complete"]),
-                (m3, "停止時の資産目安",       wstop_disp, C["blue"]),
-                (m4, "遅れ1年以内の資産目安",  w1yr_disp,  C["baseline"]),
+                (m1, "継続FIRE達成年数",       T_cont_disp, C["half"]),
+                (m2, "CDR閾値（遅れ1年以内）",  cdr_disp,    C["complete"]),
+                (m3, "停止時の資産目安",         wstop_disp,  C["blue"]),
+            ]:
+                col.markdown(f"""<div class="metric-card">
+                    <div class="metric-label">{label}</div>
+                    <div class="metric-value" style="color:{color}">{val}</div>
+                </div>""", unsafe_allow_html=True)
+
+            for col, label, val, color in [
+                (m4, "積み立て停止までの期間",   t_star_disp,  t_star_color),
+                (m5, "今すぐ停止した場合の遅れ", dT_now_disp,  C["baseline"]),
             ]:
                 col.markdown(f"""<div class="metric-card">
                     <div class="metric-label">{label}</div>
@@ -830,12 +880,12 @@ with tab_cdr:
                     annotation_position="right",
                 )
 
-                # 赤縦線：CDR閾値
-                if cdr_thresh is not None:
+                # 赤縦線：CDR閾値（20%以下のみ表示）
+                if cdr_thresh is not None and cdr_thresh <= 20:
                     fig_cdr.add_vline(
                         x=cdr_thresh,
                         line_color="#D55E00", line_width=2.0,
-                        annotation_text=f"閾値 {cdr_thresh:.1f}%",
+                        annotation_text=f"閾値 {cdr_thresh:.2f}%",
                         annotation_position="top right",
                     )
 
@@ -851,10 +901,18 @@ with tab_cdr:
                     hovermode="x unified",
                 )
                 st.plotly_chart(fig_cdr, use_container_width=True)
+
+                # 今すぐ停止可能の場合は補足表示
+                if already_stoppable:
+                    st.markdown(f"""<div class="success-box">
+                    ✅ <strong>今すぐ積み立て停止可能です。</strong><br>
+                    現在のW₀（{cdr_w0:,}万円）はすでにCDR閾値（{cdr_thresh:.2f}%）以下の水準です。
+                    今すぐ停止しても、FIRE達成は継続より <strong>{dT_now:.2f}年</strong> 遅れるだけです。
+                    </div>""", unsafe_allow_html=True)
             else:
                 st.info("パラメータを調整するとグラフが表示されます。")
 
-        # ── Research Note ─────────────────────────────────
+        # ── Research Note ──────────────────────────────────────────────
         st.markdown("---")
         st.markdown('<div class="section-title">Research Note</div>', unsafe_allow_html=True)
 
@@ -893,6 +951,10 @@ $$W_{stop} = C / \rho$$
 **停止シナリオのFIRE達成年数**
 
 $$T_{stop} = \begin{cases} t^* & (W_{stop} \geq W_{target}) \\ t^* + \dfrac{\ln(W_{target}/W_{stop})}{\ln(1+r)} & (\text{otherwise}) \end{cases}$$
+
+**t* < 0の場合（今すぐ停止可能: W₀ > W_stop）**
+
+$$T_{stop} = \frac{\ln(W_{target}/W_0)}{\ln(1+r)}$$
 
 **遅れ年数**
 
