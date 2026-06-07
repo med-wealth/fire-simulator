@@ -741,6 +741,7 @@ with tab_cdr:
             t_star_thresh     = None   # 停止までの期間（年）
             already_stoppable = False
             chart_rows        = []
+            tstar_rows        = []   # 新グラフ用: t_star vs ΔT
 
             if T_cont is not None and T_cont > 0:
 
@@ -750,6 +751,13 @@ with tab_cdr:
                     cdr_thresh    = rho_boundary * 100 if math.isfinite(rho_boundary) else 0.0
                     w_stop_thresh = cdr_w0   # 今すぐ停止 → 停止時の資産 = W0
                     t_star_thresh = 0.0      # 今すぐ停止可能
+
+                # t_starグラフ: x=0（今すぐ停止）の点を先頭に追加
+                if math.isfinite(dT_now):
+                    tstar_rows.append({
+                        "停止までの期間 t* (年)": 0.0,
+                        "遅延年数 ΔT":           round(min(dT_now, 15.0), 4),
+                    })
 
                 # Step2: チャートデータ生成（全range）
                 RHO_N    = 500
@@ -773,6 +781,13 @@ with tab_cdr:
                         else:
                             T_stop = t_star_raw + math.log(cdr_wt / W_stop) / log_R
                         dT = max(T_stop - T_cont, 0.0)
+
+                        # t_starグラフ用データ追加（t_star>=0のみ）
+                        if math.isfinite(dT):
+                            tstar_rows.append({
+                                "停止までの期間 t* (年)": round(t_star_raw, 4),
+                                "遅延年数 ΔT":           round(min(dT, 15.0), 4),
+                            })
                     else:
                         # t_star<0: W0 > W_stop → 今すぐ停止可能ゾーン → dT = dT_now（一定）
                         dT = dT_now if math.isfinite(dT_now) else None
@@ -909,6 +924,86 @@ with tab_cdr:
                     現在のW₀（{cdr_w0:,}万円）はすでにCDR閾値（{cdr_thresh:.2f}%）以下の水準です。
                     今すぐ停止しても、FIRE達成は継続より <strong>{dT_now:.2f}年</strong> 遅れるだけです。
                     </div>""", unsafe_allow_html=True)
+
+            # ── 第2グラフ: 積み立て停止までの期間 vs 遅延年数 ─────────
+            if tstar_rows:
+                df_tstar = pd.DataFrame(tstar_rows).drop_duplicates(
+                    subset=["停止までの期間 t* (年)"]
+                ).sort_values("停止までの期間 t* (年)").reset_index(drop=True)
+
+                fig_tstar = go.Figure()
+
+                # 遅れ1年以内の安全領域（うす緑）
+                df_ts_safe = df_tstar[df_tstar["遅延年数 ΔT"] <= 1.0]
+                if not df_ts_safe.empty:
+                    x_fill = list(df_ts_safe["停止までの期間 t* (年)"]) + \
+                             list(reversed(df_ts_safe["停止までの期間 t* (年)"].tolist()))
+                    y_fill = list(df_ts_safe["遅延年数 ΔT"]) + [0.0] * len(df_ts_safe)
+                    fig_tstar.add_trace(go.Scatter(
+                        x=x_fill, y=y_fill,
+                        fill="toself",
+                        fillcolor="rgba(0,158,115,0.12)",
+                        line=dict(color="rgba(0,0,0,0)"),
+                        name="安全領域（遅れ1年以内）",
+                        hoverinfo="skip",
+                        showlegend=True,
+                    ))
+
+                # メイン曲線
+                fig_tstar.add_trace(go.Scatter(
+                    x=df_tstar["停止までの期間 t* (年)"],
+                    y=df_tstar["遅延年数 ΔT"],
+                    mode="lines",
+                    line=dict(color="#56B4E9", width=2.5),
+                    name="ΔT（遅延曲線）",
+                    hovertemplate="停止まで: %{x:.2f}年<br>遅延: %{y:.2f}年<extra></extra>",
+                ))
+
+                # 遅れ1年ライン
+                fig_tstar.add_hline(
+                    y=1.0,
+                    line_dash="dash", line_color="#E69F00", line_width=1.5,
+                    annotation_text="遅れ1年", annotation_position="right",
+                )
+
+                # 閾値縦線（t_star_thresh）
+                if t_star_thresh is not None and not already_stoppable:
+                    fig_tstar.add_vline(
+                        x=t_star_thresh,
+                        line_color="#D55E00", line_width=2.0,
+                        annotation_text=f"閾値 {t_star_thresh:.1f}年後",
+                        annotation_position="top right",
+                    )
+                elif already_stoppable:
+                    fig_tstar.add_vline(
+                        x=0,
+                        line_color="#009E73", line_width=2.0,
+                        annotation_text="今すぐ停止可",
+                        annotation_position="top right",
+                    )
+
+                # T_cont縦線（継続FIRE達成年数）
+                if T_cont is not None:
+                    fig_tstar.add_vline(
+                        x=T_cont,
+                        line_color=C["gray"], line_width=1.5, line_dash="dot",
+                        annotation_text=f"継続FIRE {T_cont:.1f}年",
+                        annotation_position="top left",
+                    )
+
+                x_max_tstar = T_cont * 1.05 if T_cont else 30
+                fig_tstar.update_layout(
+                    title="積み立て停止までの期間 t* vs 遅延年数 ΔT",
+                    xaxis=dict(title="積み立て停止までの期間 t*（年）", range=[0, x_max_tstar]),
+                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, 15]),
+                    template="plotly_dark",
+                    height=380,
+                    paper_bgcolor="#1a2635",
+                    plot_bgcolor="#1a2635",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_tstar, use_container_width=True)
             else:
                 st.info("パラメータを調整するとグラフが表示されます。")
 
