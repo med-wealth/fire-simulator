@@ -741,7 +741,8 @@ with tab_cdr:
             t_star_thresh     = None   # 停止までの期間（年）
             already_stoppable = False
             chart_rows        = []
-            tstar_rows        = []   # 新グラフ用: t_star vs ΔT
+            tstar_rows        = []   # グラフ2用: t_star vs ΔT
+            wstop_rows        = []   # グラフ3用: W_stop vs ΔT
 
             if T_cont is not None and T_cont > 0:
 
@@ -752,11 +753,18 @@ with tab_cdr:
                     w_stop_thresh = cdr_w0   # 今すぐ停止 → 停止時の資産 = W0
                     t_star_thresh = 0.0      # 今すぐ停止可能
 
-                # t_starグラフ: x=0（今すぐ停止）の点を先頭に追加
+                # グラフ2: x=0（今すぐ停止）の点を先頭に追加
                 if math.isfinite(dT_now):
                     tstar_rows.append({
                         "停止までの期間 t* (年)": 0.0,
                         "遅延年数 ΔT":           round(min(dT_now, 15.0), 4),
+                    })
+
+                # グラフ3: x=W0（今すぐ停止）の点を先頭に追加
+                if math.isfinite(dT_now) and cdr_w0 > 0:
+                    wstop_rows.append({
+                        "停止時の資産 W_stop (万円)": float(cdr_w0),
+                        "遅延年数 ΔT":               round(min(dT_now, 15.0), 4),
                     })
 
                 # Step2: チャートデータ生成（全range）
@@ -782,15 +790,27 @@ with tab_cdr:
                             T_stop = t_star_raw + math.log(cdr_wt / W_stop) / log_R
                         dT = max(T_stop - T_cont, 0.0)
 
-                        # t_starグラフ用データ追加（t_star>=0のみ）
+                        # グラフ2用データ追加（t_star>=0のみ）
                         if math.isfinite(dT):
                             tstar_rows.append({
                                 "停止までの期間 t* (年)": round(t_star_raw, 4),
                                 "遅延年数 ΔT":           round(min(dT, 15.0), 4),
                             })
+                        # グラフ3用データ追加（t_star>=0: W_stop > W0）
+                        if math.isfinite(dT):
+                            wstop_rows.append({
+                                "停止時の資産 W_stop (万円)": round(W_stop, 0),
+                                "遅延年数 ΔT":               round(min(dT, 15.0), 4),
+                            })
                     else:
                         # t_star<0: W0 > W_stop → 今すぐ停止可能ゾーン → dT = dT_now（一定）
                         dT = dT_now if math.isfinite(dT_now) else None
+                        # グラフ3用: W_stop < W0 の点（dT一定）も追加
+                        if dT is not None and math.isfinite(dT):
+                            wstop_rows.append({
+                                "停止時の資産 W_stop (万円)": round(W_stop, 0),
+                                "遅延年数 ΔT":               round(min(dT, 15.0), 4),
+                            })
 
                     if dT is None or not math.isfinite(dT):
                         continue
@@ -1020,6 +1040,96 @@ with tab_cdr:
                 st.plotly_chart(fig_tstar, use_container_width=True)
             else:
                 st.info("パラメータを調整するとグラフが表示されます。")
+
+            # ── グラフ3: 停止時の資産 vs 遅延年数 ────────────────────
+            if wstop_rows:
+                df_wstop = pd.DataFrame(wstop_rows).drop_duplicates(
+                    subset=["停止時の資産 W_stop (万円)"]
+                ).sort_values("停止時の資産 W_stop (万円)").reset_index(drop=True)
+
+                fig_wstop = go.Figure()
+
+                # 安全領域（うす緑）: ΔT<=1 かつ W_stop>=w_stop_thresh
+                if w_stop_thresh is not None:
+                    df_ws_safe = df_wstop[
+                        (df_wstop["遅延年数 ΔT"] <= 1.0) &
+                        (df_wstop["停止時の資産 W_stop (万円)"] >= w_stop_thresh)
+                    ]
+                    if not df_ws_safe.empty:
+                        x_fill = list(df_ws_safe["停止時の資産 W_stop (万円)"]) + \
+                                 list(reversed(df_ws_safe["停止時の資産 W_stop (万円)"].tolist()))
+                        y_fill = list(df_ws_safe["遅延年数 ΔT"]) + [0.0] * len(df_ws_safe)
+                        fig_wstop.add_trace(go.Scatter(
+                            x=x_fill, y=y_fill,
+                            fill="toself",
+                            fillcolor="rgba(0,158,115,0.12)",
+                            line=dict(color="rgba(0,0,0,0)"),
+                            name="安全領域（遅れ1年以内）",
+                            hoverinfo="skip",
+                            showlegend=True,
+                        ))
+
+                # メイン曲線
+                fig_wstop.add_trace(go.Scatter(
+                    x=df_wstop["停止時の資産 W_stop (万円)"],
+                    y=df_wstop["遅延年数 ΔT"],
+                    mode="lines",
+                    line=dict(color="#E69F00", width=2.5),
+                    name="ΔT（遅延曲線）",
+                    hovertemplate="資産: %{x:,.0f}万円<br>遅延: %{y:.2f}年<extra></extra>",
+                ))
+
+                # 遅れ1年ライン
+                fig_wstop.add_hline(
+                    y=1.0,
+                    line_dash="dash", line_color="#E69F00", line_width=1.5,
+                    annotation_text="遅れ1年", annotation_position="right",
+                )
+
+                # 閾値縦線（w_stop_thresh）
+                if w_stop_thresh is not None:
+                    label_wstop = f"{'今すぐ停止可' if already_stoppable else f'閾値 {int(w_stop_thresh):,}万円'}"
+                    fig_wstop.add_vline(
+                        x=w_stop_thresh,
+                        line_color="#D55E00", line_width=2.0,
+                        annotation_text=label_wstop,
+                        annotation_position="top right",
+                    )
+
+                # W_target縦線
+                fig_wstop.add_vline(
+                    x=cdr_wt,
+                    line_color=C["gray"], line_width=1.5, line_dash="dot",
+                    annotation_text=f"FIRE目標 {cdr_wt:,}万円",
+                    annotation_position="top left",
+                )
+
+                # W0縦線（今すぐ停止の資産水準）
+                if cdr_w0 > 0:
+                    fig_wstop.add_vline(
+                        x=cdr_w0,
+                        line_color=C["half"], line_width=1.2, line_dash="dot",
+                        annotation_text=f"現在W₀ {cdr_w0:,}万円",
+                        annotation_position="top left",
+                    )
+
+                x_max_wstop = cdr_wt * 1.05
+                fig_wstop.update_layout(
+                    title="停止時の資産 W_stop vs 遅延年数 ΔT",
+                    xaxis=dict(
+                        title="積み立て停止時の資産 W_stop（万円）",
+                        range=[0, x_max_wstop],
+                        tickformat=",",
+                    ),
+                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, 15]),
+                    template="plotly_dark",
+                    height=380,
+                    paper_bgcolor="#1a2635",
+                    plot_bgcolor="#1a2635",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_wstop, use_container_width=True)
 
         # ── Research Note ──────────────────────────────────────────────
         st.markdown("---")
