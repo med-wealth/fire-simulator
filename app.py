@@ -666,7 +666,7 @@ with tab_scenarios:
         st.caption("出典：Human Capital as a Contingent Labor-Income Buffer — Financial Services Review（掲載予定）")
 
 # ════════════════════════════════════════════════════════════
-# TAB 5: CDR閾値研究ツール（Research Tool）【バグ修正版】
+# TAB 5: CDR閾値研究ツール（Research Tool）【クリップ除去版 v5】
 # ════════════════════════════════════════════════════════════
 with tab_cdr:
     if not is_paid:
@@ -708,7 +708,7 @@ with tab_cdr:
             annual_withdraw_disp = cdr_wt * 0.04
             st.caption(f"年間取り崩し額：{annual_withdraw_disp:,.0f}万円/年（4%ルール）")
 
-            # ── コア計算（修正版） ─────────────────────────────────────────
+            # ── コア計算 ─────────────────────────────────────────
             cdr_r    = cdr_r_pct / 100.0
             log_R    = math.log(1 + cdr_r) if cdr_r > 0 else 1e-9
             Cr       = cdr_c / cdr_r if cdr_r > 0 else 1e15
@@ -733,6 +733,10 @@ with tab_cdr:
 
             # rho_boundary: t_star=0になるCDR（W0 = W_stop の境界）
             # この値より小さいρではW0 > W_stopとなり今すぐ停止可能
+            # ※ NOTE: CDR_boundary = C/W0 を境に、ΔT(CDR)は
+            #   領域I（CDR > boundary）: 連続的に変化する曲線
+            #   領域II（CDR <= boundary）: dT = dT_now で完全に一定（理論的に正しいプラトー）
+            #   に分かれる。これはバグではなくモデルの構造である。
             rho_boundary = cdr_c / cdr_w0 if cdr_w0 > 0 else float('inf')
 
             # CDR閾値・停止時の資産・停止までの期間を決定
@@ -757,17 +761,20 @@ with tab_cdr:
                 if math.isfinite(dT_now):
                     tstar_rows.append({
                         "停止までの期間 t* (年)": 0.0,
-                        "遅延年数 ΔT":           round(min(dT_now, 15.0), 4),
+                        "遅延年数 ΔT":           round(dT_now, 4),
                     })
 
                 # グラフ3: x=W0（今すぐ停止）の点を先頭に追加
                 if math.isfinite(dT_now) and cdr_w0 > 0:
                     wstop_rows.append({
                         "停止時の資産 W_stop (万円)": float(cdr_w0),
-                        "遅延年数 ΔT":               round(min(dT_now, 15.0), 4),
+                        "遅延年数 ΔT":               round(dT_now, 4),
                     })
 
                 # Step2: チャートデータ生成（全range）
+                # ── CLIP REMOVED: 以前は min(dT, 15.0) で15年に強制クリップしていたが、
+                #    これにより高CDR側で「見せかけのプラトー」が生じていた。
+                #    研究目的のため生の値をそのまま使用する。
                 RHO_N    = 500
                 rho_list = [0.001 + i * (0.25 - 0.001) / (RHO_N - 1) for i in range(RHO_N)]
 
@@ -794,22 +801,22 @@ with tab_cdr:
                         if math.isfinite(dT):
                             tstar_rows.append({
                                 "停止までの期間 t* (年)": round(t_star_raw, 4),
-                                "遅延年数 ΔT":           round(min(dT, 15.0), 4),
+                                "遅延年数 ΔT":           round(dT, 4),
                             })
                         # グラフ3用データ追加（t_star>=0: W_stop > W0）
                         if math.isfinite(dT):
                             wstop_rows.append({
                                 "停止時の資産 W_stop (万円)": round(W_stop, 0),
-                                "遅延年数 ΔT":               round(min(dT, 15.0), 4),
+                                "遅延年数 ΔT":               round(dT, 4),
                             })
                     else:
-                        # t_star<0: W0 > W_stop → 今すぐ停止可能ゾーン → dT = dT_now（一定）
+                        # t_star<0: W0 > W_stop → 今すぐ停止可能ゾーン → dT = dT_now（一定、理論的に正しい）
                         dT = dT_now if math.isfinite(dT_now) else None
                         # グラフ3用: W_stop < W0 の点（dT一定）も追加
                         if dT is not None and math.isfinite(dT):
                             wstop_rows.append({
                                 "停止時の資産 W_stop (万円)": round(W_stop, 0),
-                                "遅延年数 ΔT":               round(min(dT, 15.0), 4),
+                                "遅延年数 ΔT":               round(dT, 4),
                             })
 
                     if dT is None or not math.isfinite(dT):
@@ -817,7 +824,7 @@ with tab_cdr:
 
                     chart_rows.append({
                         "CDR (%)":     round(rho * 100, 3),
-                        "遅延年数 ΔT": round(min(dT, 15.0), 4),
+                        "遅延年数 ΔT": round(dT, 4),
                     })
 
                 # ── CDR閾値・t_star_thresh: rho大→小（t_star小→大）の逆順で探す ──
@@ -886,6 +893,10 @@ with tab_cdr:
             if chart_rows:
                 df_cdr = pd.DataFrame(chart_rows).dropna()
 
+                # ── 動的y軸レンジ: クリップを外したので実データの最大値に応じて決定 ──
+                y_max_cdr = float(df_cdr["遅延年数 ΔT"].max()) * 1.08 if not df_cdr.empty else 15.0
+                y_max_cdr = max(y_max_cdr, 1.0)  # 最低でも1.0は確保
+
                 fig_cdr = go.Figure()
 
                 # 安全領域（うす緑）
@@ -929,7 +940,7 @@ with tab_cdr:
                     annotation_position="right",
                 )
 
-                # 赤縦線：CDR閾値（20%以下のみ表示）
+                # 赤縦線：CDR閾値（表示レンジ内のみ）
                 if cdr_thresh is not None and cdr_thresh <= 20:
                     fig_cdr.add_vline(
                         x=cdr_thresh,
@@ -938,10 +949,21 @@ with tab_cdr:
                         annotation_position="top right",
                     )
 
+                # 紫縦線：CDR_boundary = C/W0（理論プラトー境界、W0>0のときのみ表示）
+                if cdr_w0 > 0 and math.isfinite(rho_boundary):
+                    cdr_boundary_pct = rho_boundary * 100
+                    if cdr_boundary_pct <= 20:
+                        fig_cdr.add_vline(
+                            x=cdr_boundary_pct,
+                            line_color="#9966CC", line_width=1.5, line_dash="dashdot",
+                            annotation_text=f"理論境界 C/W₀={cdr_boundary_pct:.2f}%",
+                            annotation_position="bottom right",
+                        )
+
                 fig_cdr.update_layout(
-                    title="CDR ρ (%) vs 遅延年数 ΔT",
+                    title="CDR ρ (%) vs 遅延年数 ΔT（クリップなし・生データ）",
                     xaxis=dict(title="CDR ρ (%)", range=[0, 20], ticksuffix="%"),
-                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, 15]),
+                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, y_max_cdr]),
                     template="plotly_dark",
                     height=400,
                     paper_bgcolor="#1a2635",
@@ -958,12 +980,21 @@ with tab_cdr:
                     現在のW₀（{cdr_w0:,}万円）はすでにCDR閾値（{cdr_thresh:.2f}%）以下の水準です。
                     今すぐ停止しても、FIRE達成は継続より <strong>{dT_now:.2f}年</strong> 遅れるだけです。
                     </div>""", unsafe_allow_html=True)
+                elif cdr_w0 > 0:
+                    st.markdown(f"""<div class="warning-box">
+                    📐 <strong>理論境界 CDR = C/W₀ = {rho_boundary*100:.2f}%</strong> を下回ると、
+                    ΔTは <strong>{dT_now:.2f}年</strong> で完全に一定になります（W₀がすでにそのCDR水準のW_stopを超えているため）。
+                    これはバグではなく、モデル構造上の境界です。
+                    </div>""", unsafe_allow_html=True)
 
             # ── 第2グラフ: 積み立て停止までの期間 vs 遅延年数 ─────────
             if tstar_rows:
                 df_tstar = pd.DataFrame(tstar_rows).drop_duplicates(
                     subset=["停止までの期間 t* (年)"]
                 ).sort_values("停止までの期間 t* (年)").reset_index(drop=True)
+
+                y_max_tstar = float(df_tstar["遅延年数 ΔT"].max()) * 1.08 if not df_tstar.empty else 15.0
+                y_max_tstar = max(y_max_tstar, 1.0)
 
                 fig_tstar = go.Figure()
 
@@ -1027,9 +1058,9 @@ with tab_cdr:
 
                 x_max_tstar = T_cont * 1.05 if T_cont else 30
                 fig_tstar.update_layout(
-                    title="積み立て停止までの期間 t* vs 遅延年数 ΔT",
+                    title="積み立て停止までの期間 t* vs 遅延年数 ΔT（クリップなし・生データ）",
                     xaxis=dict(title="積み立て停止までの期間 t*（年）", range=[0, x_max_tstar]),
-                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, 15]),
+                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, y_max_tstar]),
                     template="plotly_dark",
                     height=380,
                     paper_bgcolor="#1a2635",
@@ -1046,6 +1077,9 @@ with tab_cdr:
                 df_wstop = pd.DataFrame(wstop_rows).drop_duplicates(
                     subset=["停止時の資産 W_stop (万円)"]
                 ).sort_values("停止時の資産 W_stop (万円)").reset_index(drop=True)
+
+                y_max_wstop = float(df_wstop["遅延年数 ΔT"].max()) * 1.08 if not df_wstop.empty else 15.0
+                y_max_wstop = max(y_max_wstop, 1.0)
 
                 fig_wstop = go.Figure()
 
@@ -1115,13 +1149,13 @@ with tab_cdr:
 
                 x_max_wstop = cdr_wt * 1.05
                 fig_wstop.update_layout(
-                    title="停止時の資産 W_stop vs 遅延年数 ΔT",
+                    title="停止時の資産 W_stop vs 遅延年数 ΔT（クリップなし・生データ）",
                     xaxis=dict(
                         title="積み立て停止時の資産 W_stop（万円）",
                         range=[0, x_max_wstop],
                         tickformat=",",
                     ),
-                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, 15]),
+                    yaxis=dict(title="遅延年数 ΔT（年）", range=[0, y_max_wstop]),
                     template="plotly_dark",
                     height=380,
                     paper_bgcolor="#1a2635",
@@ -1178,10 +1212,18 @@ $$T_{stop} = \frac{\ln(W_{target}/W_0)}{\ln(1+r)}$$
 **遅れ年数**
 
 $$\Delta T = \max(T_{stop} - T_{cont},\ 0) \quad (t^* < T_{cont} \text{ の場合のみ})$$
+
+**理論境界（プラトー境界）**
+
+CDR の境界値 $C/W_0$ を下回ると、$W_{stop} \le W_0$ となるため
+積み立て停止シナリオは「今すぐ停止」シナリオに縮退し、$\Delta T$ は
+CDRに依存せず一定値 $\Delta T_{now}$ をとる。
+
+$$\text{CDR} \leq \frac{C}{W_0} \implies \Delta T = \Delta T_{now} \text{（一定）}$$
 """)
 
         st.caption("Research Tool — 4% CDR Threshold Hypothesis  |  Medwealth Lab Tokyo")
-
+        
 # ── フッター ─────────────────────────────────────────────────
 st.markdown("---")
 st.caption("本ツールは学術論文のシミュレーションを再現したものです。投資助言ではありません。過去のデータは将来の成果を保証しません。  |  Medwealth Lab Tokyo")
